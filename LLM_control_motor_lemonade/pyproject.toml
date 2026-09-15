@@ -1,0 +1,11 @@
+[project]
+name = "llm-control-motor-lemonade"
+version = "0.1.0"
+description = "LLM 控制 micro:bit 機器人車，使用本地 Lemonade Server（OpenAI 相容 API）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bleak",
+    "openai",
+    "python-dotenv",
+]

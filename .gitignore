@@ -11,3 +11,7 @@ __pycache__/
 
 # 校正過程的原始紀錄（會一直累積）
 LLM校正馬達轉彎/trials.jsonl
+
+# 相機追蹤：模型會自動下載、截圖是測試產物
+camera_follow/models/
+camera_follow/*.jpg

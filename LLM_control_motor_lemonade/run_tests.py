@@ -2,11 +2,12 @@
 自動測試：LLM 能不能用正確的工具控制機器人
 
 執行（在專案最外層）：
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini         # 假機器人：不連藍牙、不會動、不等秒數
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini --real  # 實體測試：連 micro:bit，馬達真的會動
-    .venv/bin/python LLM控制馬達實作/run_tests.py                  # 改測本地 llama
-    .venv/bin/python LLM控制馬達實作/run_tests.py --list           # 只列出所有情境，可手動貼到 agent.py 測
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini 7 11    # 只跑第 7、11 題
+    LLM_control_motor_lemonade/.venv/bin/python LLM_control_motor_lemonade/run_tests.py          # 假機器人：不連藍牙、不會動、不等秒數
+    LLM_control_motor_lemonade/.venv/bin/python LLM_control_motor_lemonade/run_tests.py --real   # 實體測試：連 micro:bit，馬達真的會動
+    LLM_control_motor_lemonade/.venv/bin/python LLM_control_motor_lemonade/run_tests.py --list   # 只列出所有情境，可手動貼到 agent.py 測
+    LLM_control_motor_lemonade/.venv/bin/python LLM_control_motor_lemonade/run_tests.py 7 11     # 只跑第 7、11 題
+
+LLM 使用本機 Lemonade Server（設定見 agent.py 最上面或 .env）。
 
 實體測試（--real）：
     每題開始前會等你按 Enter（先把車子擺好、周圍淨空），輸入 s 跳過、q 結束。
@@ -126,7 +127,6 @@ SCENARIOS = [
 
 
 def main():
-    use_gemini = "--gemini" in sys.argv
     picked = [int(a) for a in sys.argv[1:] if a.isdigit()]
 
     if "--list" in sys.argv:
@@ -161,7 +161,7 @@ def main():
 
             robot.calls.clear()
             robot.pan_angle = 90
-            chat = make_chat(use_gemini)   # 每題都是新對話
+            chat = make_chat()   # 每題都是新對話
             try:
                 for p in prompts:
                     print(f"你：{p}")
