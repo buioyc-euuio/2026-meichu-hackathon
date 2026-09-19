@@ -11,7 +11,7 @@
 
 左右是伺服馬達，給角度就會準確轉到（90 = 正前方、150 = 往左 60°、30 = 往右 60°）。
 上下是直流馬達，只能「用某個速度轉幾秒」，沒有角度回報，所以角度是用實測的速度估的
-（ball_center.py 的 TILT_*：這台車 Z 負數才是往上；往上 110 約 220 px/s、往下 75 約 225 px/s、
+（ball_center.py 的 TILT_*：TILT_UP_SIGN 決定 Z 正負哪個是往上；每秒移動 ≈ 6.5 ×（轉速 − 40）px、
  假設上下跟左右一樣 1 度 ≈ 13.5 px）。看實際轉了幾度，照比例改 --up-seconds / --down-seconds
 （例如轉了 40° → 秒數 × 1.5）。回中間用反方向、依速度換算的秒數，會有一點誤差，最後可能不會完全回正。
 ⚠️ 沒有限位開關：先把相機扶到平衡點（正前方）再跑，建議第一次加 --step、--degrees 20 邊看邊測。
@@ -21,13 +21,13 @@ import argparse
 import asyncio
 import time
 
-from ball_center import PAN_PX_PER_DEG, TILT_PX_PER_SPEED_DOWN, TILT_PX_PER_SPEED_UP, TILT_UP_SIGN
+from ball_center import PAN_PX_PER_DEG, TILT_DEADBAND, TILT_PX_PER_SPEED, TILT_UP_SIGN
 from robot_ble import DEVICE_NAME, RobotBLE, log
 
 
 def tilt_seconds(degrees, up, speed):
     """用實測的速度估計：上下轉 degrees 度要幾秒（假設上下 1 度的畫面移動跟左右一樣）。"""
-    px_per_sec = speed * (TILT_PX_PER_SPEED_UP if up else TILT_PX_PER_SPEED_DOWN)
+    px_per_sec = max(TILT_PX_PER_SPEED * (speed - TILT_DEADBAND), 1.0)
     return round(degrees * PAN_PX_PER_DEG / px_per_sec, 2)
 
 # ====== 想改的東西都在這裡 ======
@@ -35,7 +35,7 @@ DEGREES = 60              # 每個方向轉幾度
 PAN_CENTER = 90           # 伺服：0 = 最右、90 = 正前方、180 = 最左
 PAN_SWEEP_DEG_PER_SEC = 90   # 左右慢慢轉的速度（一次跳過去太猛，也比較看不清楚）
 PAN_STEP_DEG = 2
-UP_SPEED, DOWN_SPEED = 110, 75   # 上下馬達轉速（實測往上 < 60 推不動；往下有重力幫忙，慢一點比較好控制）
+UP_SPEED, DOWN_SPEED = 80, 80   # 上下馬達轉速（實測 40 幾乎不動、80 ≈ 260 px/s，上下差不多）
 MAX_TILT_SECONDS = 4.0    # 單一動作最多轉幾秒（沒有限位開關，轉太久會卡住）
 KEEPALIVE_INTERVAL = 0.1  # 轉動中每幾秒重送一次（micro:bit 0.5 秒沒收到就停）
 PAUSE_SECONDS = 1.0       # 每個動作之間停多久，方便看

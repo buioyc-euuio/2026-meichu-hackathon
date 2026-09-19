@@ -17,3 +17,9 @@ camera_follow/models/
 camera_follow/*.jpg
 tennis_tracking/*.jpg
 tennis_tracking/models/
+
+# 追球的執行紀錄
+ball_chase/logs/
+
+# demo 總控：tracking server 的 log
+e2e/logs/

@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from pipeline import Pipeline
-from track_ball import CAMERA_INDEX, open_camera
+from track_ball import CAMERA_INDEX, camera_arg, open_camera
 
 JPEG_QUALITY = 70
 
@@ -239,12 +239,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1", help="0.0.0.0 = 讓同一個網路的其他裝置也能連")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--camera", type=int, default=CAMERA_INDEX)
+    parser.add_argument("--camera", type=camera_arg, default=CAMERA_INDEX,
+                        help="相機編號（0）或路徑（預設 GO 3S 的 /dev/v4l/by-id/ 路徑）")
     parser.add_argument("--video", help="用影片檔代替相機（會一直重播）")
     parser.add_argument("--no-yolo", action="store_true", help="不用 YOLO，只靠顏色 + 前後畫面（不找人）")
     parser.add_argument("--conf", type=float, default=0.05, help="YOLO 找球的信心門檻（預設故意放低）")
     parser.add_argument("--device", choices=("gpu", "cpu"), default="gpu")
     args = parser.parse_args()
+    print(f"🌐 http://{args.host}:{args.port}  （Ctrl+C 結束）", flush=True)
     uvicorn.run(create_app(args), host=args.host, port=args.port, log_level="warning")
 
 

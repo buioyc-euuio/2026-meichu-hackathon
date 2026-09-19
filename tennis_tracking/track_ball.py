@@ -29,7 +29,9 @@ from pipeline import Pipeline
 from tracking_helper import find_circles
 
 # ====== 想改的東西都在這裡 ======
-CAMERA_INDEX = 0                 # camera_follow/find_camera.py 找到的相機編號
+# 預設相機：用固定名稱路徑（拔插、換 USB 孔編號會變，這個路徑不會）；找不到就改用編號 0
+# 換相機：ls /dev/v4l/by-id/ 看名字，用結尾是 video-index0 的那個
+CAMERA_INDEX = "/dev/v4l/by-id/usb-GO_3S_GO_3S-video-index0"   # Insta360 GO 3S（640x360、30 fps、MJPG）
 FRAME_WIDTH, FRAME_HEIGHT = 640, 480
 PRINT_INTERVAL = 0.2             # 終端機每幾秒印一次數值
 # ================================
@@ -37,12 +39,22 @@ PRINT_INTERVAL = 0.2             # 終端機每幾秒印一次數值
 HERE = Path(__file__).resolve().parent
 
 
+def camera_arg(value):
+    """--camera 可以給編號（0）或路徑（/dev/video0、/dev/v4l/by-id/...）。"""
+    return int(value) if str(value).isdecimal() else value
+
+
 def open_camera(index):
+    index = camera_arg(index)
+    if isinstance(index, str) and not Path(index).exists():
+        print(f"⚠️  找不到 {index}，改用 /dev/video0（相機換了？ls /dev/v4l/by-id/ 看名字）", flush=True)
+        index = 0
     cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
     if not cap.isOpened():
-        raise SystemExit(f"❌ 打不開 /dev/video{index}，先跑 camera_follow/find_camera.py")
+        name = f"/dev/video{index}" if isinstance(index, int) else index
+        raise SystemExit(f"❌ 打不開 {name}（ls /dev/v4l/by-id/ 看有哪些相機，用 --camera 指定）")
     return cap
 
 
@@ -155,7 +167,7 @@ def run_tune(cap, settings):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--camera", type=int, default=CAMERA_INDEX)
+    parser.add_argument("--camera", type=camera_arg, default=CAMERA_INDEX, help="相機編號或路徑")
     parser.add_argument("--video", help="用影片檔代替相機")
     parser.add_argument("--image", help="用一張照片代替相機（存標好的結果到 track_snapshot.jpg）")
     parser.add_argument("--headless", action="store_true", help="不開視窗；相機跑 5 秒、影片跑完，存最後一張截圖")

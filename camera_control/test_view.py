@@ -1,6 +1,6 @@
 """
 測試用視窗：看「球動了，相機怎麼跟著動」。偵測結果、門檻框、誤差、送出的控制指令都畫在畫面上，
-門檻和 Kp 可以用視窗上的滑桿即時調。控制邏輯跟 ball_center.py 完全一樣（直接共用）。
+門檻、gain、平滑程度可以用視窗上的滑桿即時調。控制邏輯跟 ball_center.py 完全一樣（直接共用）。
 
 兩種模式：
 
@@ -19,8 +19,8 @@
     白色十字        畫面中心
     門檻框          球心在框內就不動（綠 = 置中、橘 = 還沒置中）
     青色粗圈 + 線   正在對準的球、跟中心的距離（dx, dy）
-    洋紅色 ×        EMA 平滑後的球位置（控制用的是這個）
-    黃色箭頭        相機現在轉的方向（左右箭頭越長轉越快）
+    洋紅色 ×        上一次決定用的位置（幾張畫面平均 + 速度預估）
+    黃色箭頭        相機現在轉的方向（左右箭頭越長 = 這一步轉越多度）
     下方面板        狀態、左右角度（量表：左邊 = 相機看左邊）、上下馬達速度、門檻、Kp
 """
 
@@ -37,8 +37,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ball_center import (DEVICE_NAME, PAN_CENTER, PAN_KP, PAN_LATENCY, PAN_PX_PER_DEG, SERVER_URL, SMOOTH,
-                         THRESHOLD_PX, TILT_LATENCY, TILT_PX_PER_SPEED_DOWN, TILT_PX_PER_SPEED_UP, TILT_UP_SIGN,
+from ball_center import (DEVICE_NAME, PAN_CENTER, PAN_GAIN, PAN_LATENCY, PAN_PX_PER_DEG, SERVER_URL, FRAMES,
+                         THRESHOLD_PX, TILT_DEADBAND, TILT_LATENCY, TILT_PX_PER_SPEED, TILT_UP_SIGN,
                          CameraController, Feed, control_loop, stop_camera)
 from robot_ble import RobotBLE, log
 
@@ -50,8 +50,6 @@ WIN = "camera_control test (q = quit)"
 SIM_PX_PER_DEG = PAN_PX_PER_DEG   # 伺服轉 1 度，畫面移動幾個像素
 SIM_SERVO_DEG_PER_SEC = 250   # 伺服轉多快（實測 10 度約 40 ms 到位）
 SIM_TILT_RANGE = 400          # 上下最多能轉到離中間幾個像素
-SIM_TILT_DEADBAND_UP = 55     # 實測：往上轉速低於這個推不動
-SIM_TILT_DEADBAND_DOWN = 35
 SIM_LATENCY = PAN_LATENCY     # 從送指令到畫面上看到相機動（藍牙 + 馬達 + 相機），左右約 0.12 秒
 SIM_TILT_EXTRA_DELAY = TILT_LATENCY - PAN_LATENCY   # 上下馬達起步比伺服再慢一點
 SIM_NOISE_PX = 2.0            # 偵測的抖動
@@ -106,10 +104,9 @@ class SimWorld:
             self._z = z
         z = getattr(self, "_z", 0)
         up = z * TILT_UP_SIGN                                    # 正 = 相機往上
-        if up > SIM_TILT_DEADBAND_UP:
-            self.tilt -= up * TILT_PX_PER_SPEED_UP * dt          # 往上看 → 畫面中心在世界的 y 變小
-        elif up < -SIM_TILT_DEADBAND_DOWN:
-            self.tilt -= up * TILT_PX_PER_SPEED_DOWN * dt
+        if abs(up) > TILT_DEADBAND:                              # 實測：每秒移動 ≈ 6.5 ×（轉速 − 40）
+            v = TILT_PX_PER_SPEED * (abs(up) - TILT_DEADBAND)
+            self.tilt -= v * dt * (1 if up > 0 else -1)          # 往上看 → 畫面中心在世界的 y 變小
         self.tilt = max(-SIM_TILT_RANGE, min(SIM_TILT_RANGE, self.tilt))
         if self.auto and not self.dragging:
             self.t += dt * self.speed
@@ -159,7 +156,7 @@ class SimFeed(Feed):
         while True:
             await asyncio.sleep(1 / SIM_FPS)
             now = time.monotonic()
-            self.world.step(now - last, controller.sent_pan, controller.tilt_speed)
+            self.world.step(now - last, controller.pan, controller.tilt_speed)
             last = now
             frame_no += 1
             delayed.append((now + SIM_LATENCY, self.world.observe(frame_no)))
@@ -232,17 +229,18 @@ def draw_frame(frame, out, draw_detections, use_tilt):
         bx, by = int(t["x"]), int(t["y"])
         cv2.line(frame, (cx, cy), (bx, by), CYAN, 1)
         cv2.circle(frame, (bx, by), int(t["r"]) + 4, CYAN, 3)
-        sx, sy = int(cx + t["dx_smooth"]), int(cy + t["dy_smooth"])   # EMA 平滑後的位置（控制用的是這個）
-        cv2.drawMarker(frame, (sx, sy), (255, 0, 255), cv2.MARKER_TILTED_CROSS, 14, 2)
+        if t["dx_avg"] is not None:   # 上一次決定用的「幾張平均 + 速度預估」位置
+            sx, sy = int(cx + t["dx_avg"]), int(cy + t["dy_avg"])
+            cv2.drawMarker(frame, (sx, sy), (255, 0, 255), cv2.MARKER_TILTED_CROSS, 14, 2)
         text(frame, f"target #{t['id']}  dx {t['dx_px']:+.0f}  dy {t['dy_px']:+.0f}  d {t['d']:.0f}px",
              (bx - 90, by + int(t["r"]) + 22), CYAN, 0.5)
-        if c["state"] == "tracking":   # 相機現在轉的方向（左右箭頭長度 = 轉速）
-            if abs(c["pan_speed"]) > 1:
-                d = -1 if c["pan_speed"] > 0 else 1     # 角度變大 = 往左
-                length = 30 + int(min(abs(c["pan_speed"]), 120) / 120 * 100)
+        if c["state"] == "tracking":   # 相機現在轉的方向（左右箭頭長度 = 這一步轉幾度）
+            if c["pan_step"]:
+                d = -1 if c["pan_step"] > 0 else 1      # 角度變大 = 往左
+                length = 30 + int(min(abs(c["pan_step"]), 15) / 15 * 100)
                 cv2.arrowedLine(frame, (cx + d * 40, cy), (cx + d * (40 + length), cy), YELLOW, 3, tipLength=0.3)
             if use_tilt and c["tilt_speed"] != 0:
-                d = -1 if c["tilt_speed"] > 0 else 1
+                d = -1 if c["tilt_speed"] * TILT_UP_SIGN > 0 else 1   # 往上 → 箭頭朝上
                 cv2.arrowedLine(frame, (cx, cy + d * 40), (cx, cy + d * 110), YELLOW, 3, tipLength=0.35)
 
 
@@ -273,18 +271,18 @@ def draw_panel(width, out, fps, mode, use_tilt):
     if c["pan"] is not None:
         x = int(x0 + (180 - c["pan"]) / 180 * (x1 - x0))
         cv2.circle(panel, (x, y), 8, YELLOW, -1)
-        text(panel, f"{c['pan']} deg  {c['pan_speed']:+.0f}/s", (x1 + 10, y + 5), YELLOW, 0.5)
+        step = f"  {c['pan_step']:+.0f}" if c["pan_step"] else ""
+        text(panel, f"{c['pan']} deg{step}", (x1 + 10, y + 5), YELLOW, 0.5)
 
     # 上下馬達
     y = 115
     if use_tilt:
         speed = c["tilt_speed"]
-        arrow = "UP" if speed > 0 else ("DOWN" if speed < 0 else "stop")
-        blocked = "  BLOCKED (turned too long)" if c["tilt_blocked"] else ""
-        text(panel, f"tilt Z {speed:+d}  {arrow}{blocked}", (10, y), RED if blocked else WHITE, 0.55)
+        arrow = "stop" if speed == 0 else ("UP" if speed * TILT_UP_SIGN > 0 else "DOWN")
+        text(panel, f"tilt Z {speed:+d} {arrow}", (10, y), WHITE, 0.55)
     else:
         text(panel, "tilt: off (--no-tilt)", (10, y), GRAY, 0.55)
-    text(panel, f"thr {c['threshold_x']:g}/{c['threshold_y']:g}px  Kp {c['kp']:g}  smooth {c['smooth']:.2f}",
+    text(panel, f"thr {c['threshold_x']:g}/{c['threshold_y']:g}px  gain {c['kp']:g}  frames {c['frames']}",
          (300, y), WHITE, 0.5)
     text(panel, f"{mode}  {fps:.0f} fps  people {len(out['people'])}", (10, 140), GRAY, 0.45)
     return panel
@@ -300,8 +298,8 @@ def main():
     parser.add_argument("--threshold", type=float, default=THRESHOLD_PX)
     parser.add_argument("--threshold-x", type=float)
     parser.add_argument("--threshold-y", type=float)
-    parser.add_argument("--kp", type=float, default=PAN_KP, help="左右：球在最邊邊時每秒轉幾度")
-    parser.add_argument("--smooth", type=float, default=SMOOTH, help="EMA 平滑的 alpha（0~1，越小越平滑但越慢）")
+    parser.add_argument("--kp", type=float, default=PAN_GAIN, help="左右每次修正誤差的幾成（0~1）")
+    parser.add_argument("--frames", type=int, default=FRAMES, help="每次看幾張畫面再決定")
     parser.add_argument("--invert-pan", action="store_true")
     parser.add_argument("--invert-tilt", action="store_true")
     parser.add_argument("--no-tilt", action="store_true")
@@ -429,9 +427,8 @@ def setup_window(args, world, set_value):
     cv2.namedWindow(WIN)
     cv2.createTrackbar("thr x px", WIN, int(args.threshold_x), 240, lambda v: set_value("threshold_x", float(v)))
     cv2.createTrackbar("thr y px", WIN, int(args.threshold_y), 240, lambda v: set_value("threshold_y", float(v)))
-    cv2.createTrackbar("Kp deg/s", WIN, int(round(args.kp)), 300, lambda v: set_value("kp", float(v)))
-    cv2.createTrackbar("smooth %", WIN, int(round(args.smooth * 100)), 100,
-                       lambda v: set_value("smooth", max(1, v) / 100))
+    cv2.createTrackbar("gain %", WIN, int(round(args.kp * 100)), 150, lambda v: set_value("kp", v / 100))
+    cv2.createTrackbar("frames", WIN, int(args.frames), 15, lambda v: set_value("frames", max(1, v)))
 
     if world:
         def on_mouse(event, x, y, flags, _):
