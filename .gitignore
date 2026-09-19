@@ -23,3 +23,6 @@ ball_chase/logs/
 
 # demo 總控：tracking server 的 log
 e2e/logs/
+
+# astra 零件（不進版控）
+astra零件/
