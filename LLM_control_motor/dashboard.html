@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>輪速儀表板</title>
+<!--
+  micro:bit 輪速儀表板：輸入左輪、右輪速度和秒數，按 Enter 直接用藍牙送給 micro:bit
+  配合 microbit_llm_motor.js（M,左輪,右輪#）
+
+  用法：用 Chrome 直接打開這個檔案（雙擊或拖進 Chrome），按「連線」選 BBC micro:bit
+  注意：micro:bit 同時只能連一台，先關掉 agent.py / calibrate.py 再連
+
+  快捷鍵：Enter 送出、Esc 或空白鍵（不在輸入框時）停止
+-->
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #dde1e8;
+    --accent: #2f6fed; --accent-text: #ffffff; --ok: #1f9d55; --bad: #d64545; --warn: #b7791f;
+    --stop: #d64545; --bar: #e7eaf0; --bar-fwd: #2f6fed; --bar-back: #e08a1e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171d; --panel: #1d2129; --text: #e6e9ef; --muted: #939bab; --line: #2e3440;
+      --accent: #5b8cff; --accent-text: #0e1320; --ok: #48bb78; --bad: #f56565; --warn: #ecc94b;
+      --stop: #f56565; --bar: #2a2f3a; --bar-fwd: #5b8cff; --bar-back: #f0a040;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 0 0 12px; }
+  .inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input[type=number], input[type=text] {
+    width: 100%; font: inherit; font-size: 22px; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  input[type=text] { font-size: 16px; }
+  input[type=range] { width: 100%; margin-top: 6px; accent-color: var(--accent); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.stop { background: var(--stop); color: #fff; border-color: var(--stop); font-weight: 700; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .big { font-size: 17px; padding: 10px 22px; }
+  .bars { display: grid; grid-template-columns: 40px 1fr 56px; gap: 6px 10px; align-items: center; margin-top: 14px; font-size: 13px; }
+  .bar { position: relative; height: 12px; background: var(--bar); border-radius: 6px; overflow: hidden; }
+  .bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: .5; }
+  .fill { position: absolute; top: 0; bottom: 0; background: var(--bar-fwd); }
+  .fill.back { background: var(--bar-back); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .progress { height: 6px; background: var(--bar); border-radius: 3px; margin-top: 14px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--ok); }
+  .hint { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td input { font-size: 14px !important; padding: 4px 6px !important; }
+  .table-wrap { overflow-x: auto; }
+  #log { font: 12px/1.6 ui-monospace, Menlo, monospace; max-height: 180px; overflow: auto; background: var(--bg); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+  .warn { color: var(--warn); } .err { color: var(--bad); }
+  @media (max-width: 560px) {
+    .inputs { grid-template-columns: 1fr 1fr; }
+    .inputs > div:last-child { grid-column: span 2; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🐶 輪速儀表板</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">未連線</span></div>
+    <button class="primary" id="connectBtn">連線 micro:bit</button>
+  </header>
+
+  <section>
+    <h2>輪子速度（-255～255，正數前進）· 按 Enter 送出</h2>
+    <div class="inputs">
+      <div>
+        <label for="left">左輪</label>
+        <input type="number" id="left" min="-255" max="255" step="1" value="140">
+        <input type="range" id="leftRange" min="-255" max="255" step="1" value="140" tabindex="-1">
+      </div>
+      <div>
+        <label for="right">右輪</label>
+        <input type="number" id="right" min="-255" max="255" step="1" value="140">
+        <input type="range" id="rightRange" min="-255" max="255" step="1" value="140" tabindex="-1">
+      </div>
+      <div>
+        <label for="seconds">秒數（0.1～10）</label>
+        <input type="number" id="seconds" min="0.1" max="10" step="0.1" value="1">
+      </div>
+    </div>
+    <div class="row">
+      <button class="primary big" id="goBtn" disabled>▶ 送出（Enter）</button>
+      <button class="stop big" id="stopBtn" disabled>■ 停止（Esc）</button>
+      <span class="hint" id="runInfo"></span>
+    </div>
+    <div class="progress"><div id="progress"></div></div>
+    <div class="bars">
+      <span>左輪</span><div class="bar"><div class="fill" id="leftFill"></div></div><span class="num" id="leftNum">0</span>
+      <span>右輪</span><div class="bar"><div class="fill" id="rightFill"></div></div><span class="num" id="rightNum">0</span>
+    </div>
+    <div class="row">
+      <span class="hint">快速設定：</span>
+      <button data-preset="140,140">直走 140</button>
+      <button data-preset="60,200">左轉弧線</button>
+      <button data-preset="200,60">右轉弧線</button>
+      <button id="swapBtn">左右互換</button>
+      <button id="negBtn">正負反轉</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>紀錄（填「結果」方便校正，例如 90 度、30 公分、往右偏）</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>時間</th><th>左輪</th><th>右輪</th><th>秒數</th><th>結果</th><th></th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <button id="copyBtn">複製紀錄（CSV）</button>
+      <button id="clearBtn">清空</button>
+      <span class="hint">點「再跑」會把數值填回上面並重跑一次</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>自訂指令（例如 W,6,180,40# 搖尾巴、P,90# 鏡頭回正、T,90# 尾巴回中間）</h2>
+    <div class="row" style="margin-top:0">
+      <input type="text" id="raw" placeholder="S#" style="flex:1; min-width:180px">
+      <button id="rawBtn" disabled>送出</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>藍牙紀錄</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+// ====== 設定 ======
+const UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const KEEPALIVE_MS = 100;    // micro:bit 0.5 秒沒收到指令會自動停車，所以動作中每 0.1 秒重送
+const MAX_SECONDS = 10;
+const SLOW_WRITE_MS = 150;   // 寫入超過這個時間就警告
+
+const $ = id => document.getElementById(id);
+const encoder = new TextEncoder();
+let device = null, writeChar = null, useWithoutResponse = false;
+let runId = 0;               // 每次送出 +1；舊的 keep-alive 迴圈看到編號變了就自己結束
+let writeChain = Promise.resolve();
+const history = [];
+
+// ---------- 紀錄 ----------
+function log(text, cls = "") {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = `${new Date().toLocaleTimeString("zh-TW", { hour12: false })}  ${text}`;
+  $("log").appendChild(line);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+// ---------- 藍牙 ----------
+async function connect() {
+  if (!navigator.bluetooth) {
+    log("這個瀏覽器不支援 Web Bluetooth，請用 Chrome 或 Edge 打開", "err");
+    return;
+  }
+  try {
+    $("statusText").textContent = "搜尋中…";
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "BBC micro:bit" }],
+      optionalServices: [UART_SERVICE],
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    const t = performance.now();
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(UART_SERVICE);
+    const chars = await service.getCharacteristics();
+    // micro:bit 的 UART 有兩個特徵值，找可以寫入的那個（跟 robot_bluetooth.py 一樣）
+    writeChar = chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
+    if (!writeChar) throw new Error("找不到可以寫入的 UART 特徵值");
+    useWithoutResponse = !writeChar.properties.write && writeChar.properties.writeWithoutResponse;
+    log(`✅ 已連線 ${device.name}（${Math.round(performance.now() - t)}ms）`);
+    setConnected(true);
+    await send("S#");
+  } catch (e) {
+    log(`連線失敗：${e.message}（micro:bit 有開機顯示愛心嗎？agent.py 有沒有正連著它？）`, "err");
+    setConnected(false);
+  }
+}
+
+function onDisconnected() {
+  runId++;
+  writeChar = null;
+  setConnected(false);
+  log("⚠️ 藍牙斷線", "warn");
+}
+
+function setConnected(on) {
+  $("dot").classList.toggle("on", on);
+  $("statusText").textContent = on ? (device?.name || "已連線") : "未連線";
+  $("connectBtn").textContent = on ? "斷線" : "連線 micro:bit";
+  for (const id of ["goBtn", "stopBtn", "rawBtn"]) $(id).disabled = !on;
+}
+
+// 藍牙一次只能做一個寫入，所以排隊一個一個送
+function send(text, quiet = false) {
+  const job = writeChain.then(async () => {
+    if (!writeChar) throw new Error("尚未連線");
+    const t = performance.now();
+    const data = encoder.encode(text);
+    if (useWithoutResponse) await writeChar.writeValueWithoutResponse(data);
+    else await writeChar.writeValueWithResponse(data);
+    const ms = performance.now() - t;
+    if (!quiet) log(`📡 ${text}  （${ms.toFixed(0)}ms）`);
+    else if (ms > SLOW_WRITE_MS) log(`⚠️ 寫入 ${text} 花了 ${ms.toFixed(0)}ms（很慢）`, "warn");
+    return ms;
+  });
+  writeChain = job.catch(() => {});
+  return job;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- 動作 ----------
+function clampInt(v, lo, hi) { return Math.round(Math.min(hi, Math.max(lo, Number(v) || 0))); }
+
+async function run(left, right, seconds) {
+  if (!writeChar) { log("先按「連線 micro:bit」", "err"); return; }
+  left = clampInt(left, -255, 255);
+  right = clampInt(right, -255, 255);
+  seconds = Math.min(MAX_SECONDS, Math.max(0.1, Number(seconds) || 1));
+  seconds = Math.round(seconds * 10) / 10;
+  setInputs(left, right, seconds);
+
+  const id = ++runId;
+  const cmd = `M,${left},${right}#`;
+  const entry = { n: history.length + 1, time: new Date().toLocaleTimeString("zh-TW", { hour12: false }),
+                  left, right, seconds, result: "" };
+  history.unshift(entry);
+  renderHistory();
+  showWheels(left, right);
+
+  const start = performance.now(), end = start + seconds * 1000;
+  let writes = [], maxGap = 0, last = start;
+  try {
+    writes.push(await send(cmd));
+    while (runId === id && performance.now() < end) {
+      const now = performance.now();
+      $("progress").style.width = `${Math.min(100, (now - start) / (seconds * 10))}%`;
+      $("runInfo").textContent = `執行中… 剩 ${((end - now) / 1000).toFixed(1)} 秒`;
+      await sleep(Math.min(KEEPALIVE_MS, end - now));
+      if (runId !== id || performance.now() >= end) break;
+      writes.push(await send(cmd, true));
+      maxGap = Math.max(maxGap, performance.now() - last);
+      last = performance.now();
+    }
+  } catch (e) {
+    log(`送出失敗：${e.message}`, "err");
+  }
+  if (runId !== id) return;          // 被新的動作或停止取代了
+  await send("S#").catch(() => {});
+  showWheels(0, 0);
+  $("progress").style.width = "100%";
+  const avg = writes.reduce((a, b) => a + b, 0) / (writes.length || 1);
+  const actual = ((performance.now() - start) / 1000).toFixed(2);
+  $("runInfo").textContent = `完成：實際 ${actual} 秒，寫入 ${writes.length} 次，平均 ${avg.toFixed(0)}ms`;
+  if (maxGap > 400) log(`⚠️ keep-alive 最久隔了 ${(maxGap / 1000).toFixed(2)}s（超過 0.5s 車子會中途停下）`, "warn");
+  document.querySelector(`#history tr:first-child input`)?.focus();
+}
+
+async function stopAll() {
+  runId++;
+  showWheels(0, 0);
+  $("progress").style.width = "0";
+  $("runInfo").textContent = "已停止";
+  if (writeChar) await send("S#").catch(e => log(`停止失敗：${e.message}`, "err"));
+}
+
+// ---------- 畫面 ----------
+function setInputs(l, r, s) {
+  $("left").value = l; $("leftRange").value = l;
+  $("right").value = r; $("rightRange").value = r;
+  if (s !== undefined) $("seconds").value = s;
+}
+
+function showWheels(l, r) {
+  for (const [side, v] of [["left", l], ["right", r]]) {
+    const fill = $(`${side}Fill`);
+    const pct = Math.abs(v) / 255 * 50;
+    fill.classList.toggle("back", v < 0);
+    fill.style.left = v >= 0 ? "50%" : `${50 - pct}%`;
+    fill.style.width = `${pct}%`;
+    $(`${side}Num`).textContent = v;
+  }
+}
+
+function renderHistory() {
+  const tbody = $("history");
+  tbody.innerHTML = "";
+  for (const h of history) {
+    const tr = document.createElement("tr");
+    for (const v of [h.n, h.time, h.left, h.right, h.seconds]) {
+      const td = document.createElement("td"); td.textContent = v; tr.appendChild(td);
+    }
+    const tdRes = document.createElement("td");
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.value = h.result; inp.placeholder = "例如 90 度";
+    inp.addEventListener("input", () => { h.result = inp.value; });
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); $("left").focus(); } });
+    tdRes.appendChild(inp); tr.appendChild(tdRes);
+    const tdBtn = document.createElement("td");
+    const again = document.createElement("button");
+    again.textContent = "再跑";
+    again.addEventListener("click", () => run(h.left, h.right, h.seconds));
+    tdBtn.appendChild(again); tr.appendChild(tdBtn);
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- 事件 ----------
+$("connectBtn").addEventListener("click", () => {
+  if (device?.gatt?.connected) { stopAll().finally(() => device.gatt.disconnect()); }
+  else connect();
+});
+$("goBtn").addEventListener("click", () => run($("left").value, $("right").value, $("seconds").value));
+$("stopBtn").addEventListener("click", stopAll);
+
+for (const side of ["left", "right"]) {
+  $(`${side}Range`).addEventListener("input", e => { $(side).value = e.target.value; });
+  $(side).addEventListener("input", e => { $(`${side}Range`).value = e.target.value; });
+}
+for (const id of ["left", "right", "seconds"]) {
+  $(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); run($("left").value, $("right").value, $("seconds").value); }
+  });
+}
+document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => {
+  const [l, r] = b.dataset.preset.split(",").map(Number);
+  setInputs(l, r);
+  $("left").focus();
+}));
+$("swapBtn").addEventListener("click", () => setInputs($("right").value, $("left").value));
+$("negBtn").addEventListener("click", () => setInputs(-$("left").value, -$("right").value));
+
+$("rawBtn").addEventListener("click", () => {
+  let t = $("raw").value.trim();
+  if (!t) return;
+  if (!t.endsWith("#")) t += "#";
+  if (encoder.encode(t).length > 20) { log("指令太長：藍牙一次最多 20 個字元", "err"); return; }
+  send(t).catch(e => log(`送出失敗：${e.message}`, "err"));
+});
+$("raw").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("rawBtn").click(); } });
+
+document.addEventListener("keydown", e => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
+  if (e.key === "Escape" || (e.key === " " && !typing)) { e.preventDefault(); stopAll(); }
+});
+
+$("copyBtn").addEventListener("click", async () => {
+  const rows = ["#,時間,左輪,右輪,秒數,結果",
+    ...[...history].reverse().map(h => [h.n, h.time, h.left, h.right, h.seconds, `"${h.result.replace(/"/g, '""')}"`].join(","))];
+  try { await navigator.clipboard.writeText(rows.join("\n")); log(`已複製 ${history.length} 筆紀錄`); }
+  catch { log("複製失敗，請手動選取表格", "err"); }
+});
+$("clearBtn").addEventListener("click", () => { history.length = 0; renderHistory(); });
+
+// 關掉分頁前先停車
+window.addEventListener("beforeunload", () => { if (writeChar) send("S#"); });
+
+showWheels(0, 0);
+log(navigator.bluetooth ? "按「連線 micro:bit」開始" : "這個瀏覽器不支援 Web Bluetooth，請用 Chrome 或 Edge", navigator.bluetooth ? "" : "err");
+</script>
+</body>
+</html>

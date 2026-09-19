@@ -107,6 +107,15 @@ SCENARIOS = [
      lambda c: ("turn_left" in names(c) or any(p > 90 for p in pans(c)))
      and "turn_right" not in names(c) and not any(p < 90 for p in pans(c))),
 
+    # 尾巴
+    (["搖搖尾巴"],
+     "呼叫 wag_tail 或 tail_emotion，輪子不動",
+     lambda c: {"wag_tail", "tail_emotion"} & set(names(c)) and not MOVES & set(names(c))),
+    (["你好興奮喔！一邊搖尾巴一邊原地轉圈圈"],
+     "先搖尾巴（wag_tail / tail_emotion），再 turn_left 或 turn_right",
+     lambda c: any(in_order(c, [t, m]) for t in ("wag_tail", "tail_emotion")
+                   for m in ("turn_left", "turn_right"))),
+
     # 多輪對話（記得上一句）
     (["把鏡頭轉到 45 度", "鏡頭再往右轉 30 度"],
      "最後 camera_pan(15)（往右是減角度）",

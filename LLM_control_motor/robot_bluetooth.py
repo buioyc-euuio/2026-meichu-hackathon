@@ -19,12 +19,15 @@ from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
+from latency import latency, timed
+
 # ====== 想改的東西都在這裡 ======
 DEVICE_NAME = "micro:bit"    # 藍牙名稱包含這段就連；教室很多片可改成 "vapup"
 DEFAULT_SPEED = 140          # 前進後退的預設轉速（0~255；太低可能推不動車子）
-TURN_SPEED = 180             # 轉彎的預設轉速
-TURN_90_SECONDS = 1.1        # 轉 90 度大約幾秒（粗估：速度 180 轉 0.5 秒約 40 度）
-# ↑ 以上三個是還沒校正時的數值；跑過校正後會改用 LLM校正馬達轉彎/calibration.json
+TURN_SPEED = 200             # 轉彎時外側輪子的轉速
+TURN_INNER_SPEED = 60        # 轉彎時內側輪子的轉速（比外側慢 → 走弧線；負數 = 原地轉，但容易卡住）
+TURN_90_SECONDS = 2.0        # 轉 90 度大約幾秒（還沒校正的粗估值）
+# ↑ 以上是還沒校正時的數值；跑過校正後會改用 LLM校正馬達轉彎/calibration.json
 MAX_MOVE_SECONDS = 5.0       # 輪子單一動作最多幾秒
 MAX_CAMERA_Z_SECONDS = 1.0   # 相機上下單一動作最多幾秒（沒有限位開關，轉太久可能卡住）
 KEEPALIVE_INTERVAL = 0.1     # 動作中每幾秒重送一次指令
@@ -39,10 +42,20 @@ try:
     CALIBRATION = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
 except (OSError, ValueError):
     CALIBRATION = {}
-DEFAULT_SPEED = CALIBRATION.get("move_speed", DEFAULT_SPEED)
-TURN_SPEED = CALIBRATION.get("turn_speed", TURN_SPEED)
-TURN_LEFT_90_SECONDS = CALIBRATION.get("turn_left", {}).get("seconds_for_90", TURN_90_SECONDS)
-TURN_RIGHT_90_SECONDS = CALIBRATION.get("turn_right", {}).get("seconds_for_90", TURN_90_SECONDS)
+_straight = CALIBRATION.get("move_forward", {})
+_left_turn = CALIBRATION.get("turn_left", {})
+_right_turn = CALIBRATION.get("turn_right", {})
+# 直走：兩個馬達快慢不同，校正出「左 140、右 115 才走直線」這種比例，前進後退都照比例縮放
+_sl, _sr = _straight.get("left_speed", DEFAULT_SPEED), _straight.get("right_speed", DEFAULT_SPEED)
+DEFAULT_SPEED = max(_sl, _sr)
+STRAIGHT_LEFT_RATIO, STRAIGHT_RIGHT_RATIO = _sl / DEFAULT_SPEED, _sr / DEFAULT_SPEED
+# 轉彎：左轉和右轉各自的左右輪速度（外側 = speed、內側 = inner_speed）
+TURN_LEFT_SPEED = _left_turn.get("right_speed", TURN_SPEED)
+TURN_LEFT_INNER_SPEED = _left_turn.get("left_speed", TURN_INNER_SPEED)
+TURN_RIGHT_SPEED = _right_turn.get("left_speed", TURN_SPEED)
+TURN_RIGHT_INNER_SPEED = _right_turn.get("right_speed", TURN_INNER_SPEED)
+TURN_LEFT_90_SECONDS = _left_turn.get("seconds_for_90", TURN_90_SECONDS)
+TURN_RIGHT_90_SECONDS = _right_turn.get("seconds_for_90", TURN_90_SECONDS)
 
 
 def clamp(value, low, high):
@@ -58,6 +71,7 @@ class Robot:
         self.client = None
         self.write_char = None
         self.pan_angle = 90   # 記住相機左右角度，給 get_status 回報
+        self.tail_angle = 90  # 記住尾巴角度，給 get_status 回報
         self.calls = []       # 紀錄 LLM 呼叫過的工具（自動測試用）
         # bleak 需要 asyncio，所以開一個背景執行緒專門跑藍牙
         self.loop = asyncio.new_event_loop()
@@ -75,6 +89,7 @@ class Robot:
 
     async def _connect(self):
         print("🔍 搜尋 micro:bit ...")
+        t = time.monotonic()
         device = await BleakScanner.find_device_by_filter(
             lambda d, adv: DEVICE_NAME.lower() in (d.name or adv.local_name or "").lower(),
             timeout=10)
@@ -87,7 +102,7 @@ class Robot:
             c for c in self.client.services.get_service(UART_SERVICE).characteristics
             if "write" in c.properties or "write-without-response" in c.properties
         )
-        print(f"✅ 已連線 {device.name}")
+        print(f"✅ 已連線 {device.name}（花了 {time.monotonic() - t:.1f}s）")
 
     def disconnect(self):
         if self.fake or not self.client:
@@ -100,8 +115,10 @@ class Robot:
     def send(self, text, quiet=False):
         if not quiet:
             print(f"   📡 {text}")
+        t = time.monotonic()
         if not self.fake:
             self._run(self.client.write_gatt_char(self.write_char, text.encode()))
+        latency.bluetooth_write(time.monotonic() - t, text)
 
     def sleep(self, seconds):
         if not self.fast:
@@ -111,11 +128,16 @@ class Robot:
         """送出指令，持續重送 seconds 秒（keep-alive），然後全部停止。"""
         self.send(text)
         if not self.fast:
-            end = time.monotonic() + seconds
+            last = time.monotonic()
+            end = last + seconds
+            max_gap = 0
             while end - time.monotonic() > KEEPALIVE_INTERVAL:
                 time.sleep(KEEPALIVE_INTERVAL)
                 self.send(text, quiet=True)
+                max_gap, last = max(max_gap, time.monotonic() - last), time.monotonic()
             time.sleep(max(0, end - time.monotonic()))
+            if max_gap > 0.4:   # 超過 0.5 秒 micro:bit 就會自動停車，動作會一頓一頓
+                latency.log(f"⚠️ keep-alive 最久隔了 {max_gap:.2f}s 才重送（超過 0.5s 車子會中途停下）")
         self.send("S#")
 
     def record(self, name, **args):
@@ -151,7 +173,7 @@ def move_forward(seconds: float = 1.0, speed: int = DEFAULT_SPEED) -> str:
         speed: 轉速 0 到 255，越大越快；慢速約 120、一般 180、全速 255
     """
     robot.record("move_forward", seconds=seconds, speed=speed)
-    s = _wheels(_speed(speed), _speed(speed), seconds)
+    s = _wheels(_speed(speed) * STRAIGHT_LEFT_RATIO, _speed(speed) * STRAIGHT_RIGHT_RATIO, seconds)
     return f"已前進 {s} 秒，速度 {_speed(speed)}"
 
 
@@ -163,34 +185,46 @@ def move_backward(seconds: float = 1.0, speed: int = DEFAULT_SPEED) -> str:
         speed: 轉速 0 到 255，越大越快；慢速約 120、一般 180、全速 255
     """
     robot.record("move_backward", seconds=seconds, speed=speed)
-    s = _wheels(-_speed(speed), -_speed(speed), seconds)
+    s = _wheels(-_speed(speed) * STRAIGHT_LEFT_RATIO, -_speed(speed) * STRAIGHT_RIGHT_RATIO, seconds)
     return f"已後退 {s} 秒，速度 {_speed(speed)}"
 
 
-def turn_left(seconds: float = TURN_LEFT_90_SECONDS, speed: int = TURN_SPEED) -> str:
-    """車子原地向左轉（逆時針），時間到自動停下。不指定秒數和速度時，預設轉約 90 度。
-    要轉其他角度時，依照 system prompt 裡的「校正知識」換算秒數，並使用相同的速度。
+def _inner(inner_speed):
+    return int(clamp(float(inner_speed), -255, 255))
+
+
+def turn_left(seconds: float = TURN_LEFT_90_SECONDS, speed: int = TURN_LEFT_SPEED,
+              inner_speed: int = TURN_LEFT_INNER_SPEED) -> str:
+    """車子向左轉（逆時針），時間到自動停下。預設是邊前進邊轉的弧線轉彎：
+    右輪（外側）用 speed、左輪（內側）用比較慢的 inner_speed。不指定參數時，預設轉約 90 度。
+    要轉其他角度時，依照 system prompt 裡的「校正知識」換算秒數，並使用相同的兩個速度。
 
     Args:
         seconds: 轉幾秒，0.1 到 5
-        speed: 轉速 0 到 255；換速度會讓轉的角度改變，沒必要就用預設
+        speed: 外側（右）輪轉速 0 到 255；換速度會讓轉的角度改變，沒必要就用預設
+        inner_speed: 內側（左）輪轉速 -255 到 255；比 speed 小越多彎得越急。
+            0 = 以左輪為中心轉；負數（例如 -speed）= 原地轉圈，但地面摩擦大時容易卡住
     """
-    robot.record("turn_left", seconds=seconds, speed=speed)
-    s = _wheels(-_speed(speed), _speed(speed), seconds)
-    return f"已原地左轉 {s} 秒"
+    robot.record("turn_left", seconds=seconds, speed=speed, inner_speed=inner_speed)
+    s = _wheels(_inner(inner_speed), _speed(speed), seconds)
+    return f"已左轉 {s} 秒（左輪 {_inner(inner_speed)}、右輪 {_speed(speed)}）"
 
 
-def turn_right(seconds: float = TURN_RIGHT_90_SECONDS, speed: int = TURN_SPEED) -> str:
-    """車子原地向右轉（順時針），時間到自動停下。不指定秒數和速度時，預設轉約 90 度。
-    要轉其他角度時，依照 system prompt 裡的「校正知識」換算秒數，並使用相同的速度。
+def turn_right(seconds: float = TURN_RIGHT_90_SECONDS, speed: int = TURN_RIGHT_SPEED,
+               inner_speed: int = TURN_RIGHT_INNER_SPEED) -> str:
+    """車子向右轉（順時針），時間到自動停下。預設是邊前進邊轉的弧線轉彎：
+    左輪（外側）用 speed、右輪（內側）用比較慢的 inner_speed。不指定參數時，預設轉約 90 度。
+    要轉其他角度時，依照 system prompt 裡的「校正知識」換算秒數，並使用相同的兩個速度。
 
     Args:
         seconds: 轉幾秒，0.1 到 5
-        speed: 轉速 0 到 255；換速度會讓轉的角度改變，沒必要就用預設
+        speed: 外側（左）輪轉速 0 到 255；換速度會讓轉的角度改變，沒必要就用預設
+        inner_speed: 內側（右）輪轉速 -255 到 255；比 speed 小越多彎得越急。
+            0 = 以右輪為中心轉；負數（例如 -speed）= 原地轉圈，但地面摩擦大時容易卡住
     """
-    robot.record("turn_right", seconds=seconds, speed=speed)
-    s = _wheels(_speed(speed), -_speed(speed), seconds)
-    return f"已原地右轉 {s} 秒"
+    robot.record("turn_right", seconds=seconds, speed=speed, inner_speed=inner_speed)
+    s = _wheels(_speed(speed), _inner(inner_speed), seconds)
+    return f"已右轉 {s} 秒（左輪 {_speed(speed)}、右輪 {_inner(inner_speed)}）"
 
 
 def drive(left_speed: int, right_speed: int, seconds: float = 1.0) -> str:
@@ -250,10 +284,78 @@ def camera_pan(angle: int) -> str:
     return f"相機已轉到 {a} 度{note}"
 
 
+# ---------- 尾巴（伺服馬達，micro:bit P13）----------
+# 搖尾巴由 micro:bit 在背景執行，送出指令後馬上回傳，
+# 所以 LLM 可以接著呼叫 turn_left 等動作，做到「一邊搖尾巴一邊轉圈」。
+TAIL_EMOTIONS = {         # 情緒 → (來回次數, 每擺一邊幾毫秒, 左右各擺幾度)
+    "開心": (6, 180, 40),
+    "興奮": (20, 100, 60),
+    "好奇": (3, 350, 20),
+    "難過": (2, 700, 10),
+}
+
+
+def _wag(times, interval_ms, amplitude):
+    times = int(clamp(float(times), 1, 50))
+    interval_ms = int(clamp(float(interval_ms), 80, 1000))
+    amplitude = int(clamp(float(amplitude), 5, 90))
+    robot.send(f"W,{times},{interval_ms},{amplitude}#")
+    robot.tail_angle = 90
+    return times, interval_ms, amplitude, round(times * interval_ms * 2 / 1000, 1)
+
+
+def tail_angle(angle: int) -> str:
+    """把尾巴轉到指定角度並停住（會中斷正在進行的搖尾巴）。90 = 中間、0 = 最左、180 = 最右。
+
+    Args:
+        angle: 角度 0 到 180
+    """
+    robot.record("tail_angle", angle=angle)
+    a = int(clamp(float(angle), 0, 180))
+    robot.send(f"T,{a}#")
+    robot.tail_angle = a
+    robot.sleep(SERVO_SETTLE_SECONDS)
+    note = "" if a == float(angle) else f"（{angle} 超出範圍，已限制為 {a}）"
+    return f"尾巴已轉到 {a} 度{note}"
+
+
+def wag_tail(times: int = 6, interval_ms: int = 180, amplitude: int = 40) -> str:
+    """搖尾巴：以中間為中心左右來回擺動，搖完自動回到中間。
+    尾巴在背景搖，這個工具會馬上回傳，可以接著呼叫其他動作（例如邊搖尾巴邊轉圈）。
+    只是想表現情緒時，優先用 tail_emotion。
+
+    Args:
+        times: 左右來回幾次，1 到 50
+        interval_ms: 每擺一邊停幾毫秒，80 到 1000；越小搖越快，快約 100、普通約 180、慢約 400
+        amplitude: 左右各擺幾度，5 到 90；越大擺越開
+    """
+    robot.record("wag_tail", times=times, interval_ms=interval_ms, amplitude=amplitude)
+    t, ms, amp, total = _wag(times, interval_ms, amplitude)
+    return f"開始搖尾巴 {t} 下（每邊 {ms} 毫秒、擺幅 {amp} 度），約 {total} 秒搖完"
+
+
+def tail_emotion(emotion: str) -> str:
+    """用尾巴表現情緒。尾巴在背景搖，會馬上回傳，可以接著做其他動作。
+
+    Args:
+        emotion: 開心、興奮、好奇、難過、平靜 其中之一（平靜 = 停止搖動、回到中間）
+    """
+    robot.record("tail_emotion", emotion=emotion)
+    if emotion == "平靜":
+        robot.send("T,90#")
+        robot.tail_angle = 90
+        return "尾巴停下來，回到中間"
+    if emotion not in TAIL_EMOTIONS:
+        return f"不支援「{emotion}」，只能用：{'、'.join(TAIL_EMOTIONS)}、平靜"
+    t, ms, amp, total = _wag(*TAIL_EMOTIONS[emotion])
+    return f"尾巴表現「{emotion}」：搖 {t} 下，約 {total} 秒"
+
+
 def stop() -> str:
-    """立刻停止所有馬達（輪子和相機上下）。"""
+    """立刻停止所有馬達（輪子、相機上下，尾巴也停止搖動回到中間）。"""
     robot.record("stop")
     robot.send("S#")
+    robot.tail_angle = 90
     return "已全部停止"
 
 
@@ -270,13 +372,16 @@ def wait(seconds: float) -> str:
 
 
 def get_status() -> str:
-    """查詢機器人目前狀態，例如相機左右角度。"""
+    """查詢機器人目前狀態，例如相機左右角度、尾巴角度。"""
     robot.record("get_status")
-    return f"相機左右角度 {robot.pan_angle} 度（0 最右、90 正前方、180 最左）"
+    return (f"相機左右角度 {robot.pan_angle} 度（0 最右、90 正前方、180 最左）；"
+            f"尾巴角度 {robot.tail_angle} 度（90 中間）")
 
 
-TOOLS = [
+# timed：記錄每個工具的延遲（見 latency.py）
+TOOLS = [timed(f) for f in (
     move_forward, move_backward, turn_left, turn_right, drive,
     camera_up, camera_down, camera_pan,
+    tail_angle, wag_tail, tail_emotion,
     stop, wait, get_status,
-]
+)]
