@@ -2,9 +2,9 @@
 用自然語言控制機器人車（輪子 + 相機），LLM tool calling → 藍牙 → micro:bit
 
 執行（在專案最外層）：
-    .venv/bin/python LLM控制馬達實作/agent.py --gemini          # Gemini ＋真的 micro:bit
-    .venv/bin/python LLM控制馬達實作/agent.py --gemini --fake   # 不連 micro:bit，只測 LLM
-    .venv/bin/python LLM控制馬達實作/agent.py                   # 本地 llama（Ollama）
+    .venv/bin/python LLM_control_motor/agent.py --gemini          # Gemini ＋真的 micro:bit
+    .venv/bin/python LLM_control_motor/agent.py --gemini --fake   # 不連 micro:bit，只測 LLM
+    .venv/bin/python LLM_control_motor/agent.py                   # 本地 llama（Ollama）
 """
 
 import sys

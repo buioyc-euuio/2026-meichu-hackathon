@@ -15,8 +15,8 @@
 產生的檔案（都在這個資料夾 LLM校正馬達轉彎/）：
     trials.jsonl          每一次嘗試的原始紀錄（每次校正都會累積下去）
     report_日期_時間.md    這次校正的報告 → 交給 Claude 看的就是這份
-    calibration.json      校正後的數值，LLM控制馬達實作/robot_bluetooth.py 會讀來當預設值
-    knowledge.md          學到的知識，LLM控制馬達實作/agent.py 會自動加進 LLM 的 system prompt
+    calibration.json      校正後的數值，LLM_control_motor/robot_bluetooth.py 會讀來當預設值
+    knowledge.md          學到的知識，LLM_control_motor/agent.py 會自動加進 LLM 的 system prompt
 
 小技巧：在地上用膠帶貼出 0 度、90 度、180 度的線，觀察角度會準很多。
 """
@@ -27,8 +27,8 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# 借用 LLM控制馬達實作/ 裡的 agent.py 和 robot_bluetooth.py（藍牙連線和車子工具）
-sys.path.insert(0, str(HERE.parent / "LLM控制馬達實作"))
+# 借用 LLM_control_motor/ 裡的 agent.py 和 robot_bluetooth.py（藍牙連線和車子工具）
+sys.path.insert(0, str(HERE.parent / "LLM_control_motor"))
 
 from google import genai
 from google.genai import types

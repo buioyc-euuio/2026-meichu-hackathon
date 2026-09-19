@@ -16,17 +16,17 @@
 
 **控制車子**
 ```bash
-.venv/bin/python LLM控制馬達實作/agent.py --gemini          # Gemini + 真的車子
-.venv/bin/python LLM控制馬達實作/agent.py --gemini --fake   # 不連車子，只測對話
-.venv/bin/python LLM控制馬達實作/agent.py                   # 改用本地 llama
+.venv/bin/python LLM_control_motor/agent.py --gemini          # Gemini + 真的車子
+.venv/bin/python LLM_control_motor/agent.py --gemini --fake   # 不連車子，只測對話
+.venv/bin/python LLM_control_motor/agent.py                   # 改用本地 llama
 ```
 
 **測試**
 ```bash
-.venv/bin/python LLM控制馬達實作/run_tests.py --gemini          # 假機器人，快速跑完全部
-.venv/bin/python LLM控制馬達實作/run_tests.py --gemini --real   # 連真車，馬達會動
-.venv/bin/python LLM控制馬達實作/run_tests.py --gemini 7 11     # 只跑第 7、11 題
-.venv/bin/python LLM控制馬達實作/run_tests.py --list            # 列出所有測試句子
+.venv/bin/python LLM_control_motor/run_tests.py --gemini          # 假機器人，快速跑完全部
+.venv/bin/python LLM_control_motor/run_tests.py --gemini --real   # 連真車，馬達會動
+.venv/bin/python LLM_control_motor/run_tests.py --gemini 7 11     # 只跑第 7、11 題
+.venv/bin/python LLM_control_motor/run_tests.py --list            # 列出所有測試句子
 ```
 `--real`：每題開始前按 Enter，輸入 `s` 跳過、`q` 結束，做完回答 y/n 判斷實際動作。第一次建議把車子架高。
 

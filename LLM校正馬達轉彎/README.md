@@ -1,7 +1,7 @@
 # LLM 校正馬達轉彎
 
 跟 LLM 一起反覆測試，讓「左轉」剛好 90 度、前進速度合適，並把學到的數值寫回控制程式。
-藍牙和車子工具借用 `../LLM控制馬達實作/`，micro:bit 程式也用那裡的 `microbit_llm_motor.js`。
+藍牙和車子工具借用 `../LLM_control_motor/`，micro:bit 程式也用那裡的 `microbit_llm_motor.js`。
 
 ## 指令（在專案最外層 `2026梅竹黑客松/` 執行）
 
