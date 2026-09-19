@@ -9,8 +9,9 @@
 |---|---|
 | `藍牙連線簡單模板/` | 最小可動的藍牙範例：鍵盤遙控、V7RC 車、tkinter 介面 |
 | `LLM控制microbit模板/` | LLM tool calling 的乾淨模板（Ollama 本地模型或 Gemini 都可） |
-| `LLM控制馬達實作/` | 實際跑的版本：輪子 ＋ 相機工具、對話介面、測試腳本 |
+| `LLM_control_motor/` | 實際跑的版本：輪子 ＋ 相機工具、對話介面、測試腳本 |
 | `LLM校正馬達轉彎/` | 跟 LLM 一起把「左轉」校正成剛好 90 度，產生 `calibration.json` 和 `knowledge.md` |
+| `tennis_tracking/` | 相機追蹤多顆網球和多個人（YOLO + 傳統 CV，跑在 GPU），FastAPI 即時串流 JSON |
 
 每個資料夾都有自己的 README，寫了該怎麼跑。
 
@@ -27,8 +28,8 @@ micro:bit 端的程式是各資料夾裡的 `.js`，貼到 [MakeCode](https://ma
 藍牙設定要選 **No Pairing Required**。
 
 ```bash
-.venv/bin/python LLM控制馬達實作/agent.py --gemini          # 真的車子
-.venv/bin/python LLM控制馬達實作/agent.py --gemini --fake   # 不連車，只測對話
+.venv/bin/python LLM_control_motor/agent.py --gemini          # 真的車子
+.venv/bin/python LLM_control_motor/agent.py --gemini --fake   # 不連車，只測對話
 ```
 
 ## 需要的東西

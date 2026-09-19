@@ -2,11 +2,11 @@
 自動測試：LLM 能不能用正確的工具控制機器人
 
 執行（在專案最外層）：
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini         # 假機器人：不連藍牙、不會動、不等秒數
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini --real  # 實體測試：連 micro:bit，馬達真的會動
-    .venv/bin/python LLM控制馬達實作/run_tests.py                  # 改測本地 llama
-    .venv/bin/python LLM控制馬達實作/run_tests.py --list           # 只列出所有情境，可手動貼到 agent.py 測
-    .venv/bin/python LLM控制馬達實作/run_tests.py --gemini 7 11    # 只跑第 7、11 題
+    .venv/bin/python LLM_control_motor/run_tests.py --gemini         # 假機器人：不連藍牙、不會動、不等秒數
+    .venv/bin/python LLM_control_motor/run_tests.py --gemini --real  # 實體測試：連 micro:bit，馬達真的會動
+    .venv/bin/python LLM_control_motor/run_tests.py                  # 改測本地 llama
+    .venv/bin/python LLM_control_motor/run_tests.py --list           # 只列出所有情境，可手動貼到 agent.py 測
+    .venv/bin/python LLM_control_motor/run_tests.py --gemini 7 11    # 只跑第 7、11 題
 
 實體測試（--real）：
     每題開始前會等你按 Enter（先把車子擺好、周圍淨空），輸入 s 跳過、q 結束。
