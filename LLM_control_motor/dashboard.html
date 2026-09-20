@@ -40,6 +40,9 @@
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
   h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 0 0 12px; }
   .inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tail-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tail-angle { max-width: 280px; }
+  .tail-status { min-height: 1.5em; }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
   input[type=number], input[type=text] {
     width: 100%; font: inherit; font-size: 22px; padding: 8px 10px; border-radius: 8px;
@@ -78,6 +81,8 @@
   @media (max-width: 560px) {
     .inputs { grid-template-columns: 1fr 1fr; }
     .inputs > div:last-child { grid-column: span 2; }
+    .tail-inputs { grid-template-columns: 1fr 1fr; }
+    .tail-inputs > div:last-child { grid-column: span 2; }
   }
 </style>
 </head>
@@ -125,6 +130,35 @@
       <button id="swapBtn">左右互換</button>
       <button id="negBtn">正負反轉</button>
     </div>
+  </section>
+
+  <section>
+    <h2>尾巴控制（伺服馬達 P13，90° 為中間）</h2>
+    <div class="tail-angle">
+      <label for="tailAngle">指定角度（0～180°）</label>
+      <input type="number" id="tailAngle" min="0" max="180" step="1" value="90">
+      <input type="range" id="tailRange" min="0" max="180" step="1" value="90" tabindex="-1">
+    </div>
+    <div class="row">
+      <button class="primary" id="tailSetBtn" data-tail-control disabled>設定角度</button>
+      <button id="tailCenterBtn" data-tail-control disabled>回中間／停止搖尾巴</button>
+      <span class="hint tail-status" id="tailStatus" role="status">尾巴角度：90°</span>
+    </div>
+    <h2 style="margin-top:18px">搖尾巴</h2>
+    <div class="tail-inputs">
+      <div><label for="wagTimes">來回次數（1～50）</label><input type="number" id="wagTimes" min="1" max="50" step="1" value="6"></div>
+      <div><label for="wagMs">每邊停留（80～1000 毫秒）</label><input type="number" id="wagMs" min="80" max="1000" step="1" value="180"></div>
+      <div><label for="wagAmp">左右擺幅（5～90°）</label><input type="number" id="wagAmp" min="5" max="90" step="1" value="40"></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="wagBtn" data-tail-control disabled>開始搖尾巴</button>
+      <span class="hint">快速設定：</span>
+      <button data-wag-preset="6,180,40" data-tail-control disabled>開心</button>
+      <button data-wag-preset="20,100,60" data-tail-control disabled>興奮</button>
+      <button data-wag-preset="3,350,20" data-tail-control disabled>好奇</button>
+      <button data-wag-preset="2,700,10" data-tail-control disabled>難過</button>
+    </div>
+    <p class="hint">搖尾巴會在 micro:bit 上自行完成；按「回中間」或「停止」可中斷。</p>
   </section>
 
   <section>
@@ -203,6 +237,7 @@ async function connect() {
     log(`✅ 已連線 ${device.name}（${Math.round(performance.now() - t)}ms）`);
     setConnected(true);
     await send("S#");
+    resetTailDisplay();
   } catch (e) {
     log(`連線失敗：${e.message}（micro:bit 有開機顯示愛心嗎？agent.py 有沒有正連著它？）`, "err");
     setConnected(false);
@@ -221,6 +256,7 @@ function setConnected(on) {
   $("statusText").textContent = on ? (device?.name || "已連線") : "未連線";
   $("connectBtn").textContent = on ? "斷線" : "連線 micro:bit";
   for (const id of ["goBtn", "stopBtn", "rawBtn"]) $(id).disabled = !on;
+  document.querySelectorAll("[data-tail-control]").forEach(button => { button.disabled = !on; });
 }
 
 // 藍牙一次只能做一個寫入，所以排隊一個一個送
@@ -279,7 +315,7 @@ async function run(left, right, seconds) {
     log(`送出失敗：${e.message}`, "err");
   }
   if (runId !== id) return;          // 被新的動作或停止取代了
-  await send("S#").catch(() => {});
+  await send("S#").then(resetTailDisplay).catch(() => {});
   showWheels(0, 0);
   $("progress").style.width = "100%";
   const avg = writes.reduce((a, b) => a + b, 0) / (writes.length || 1);
@@ -294,7 +330,51 @@ async function stopAll() {
   showWheels(0, 0);
   $("progress").style.width = "0";
   $("runInfo").textContent = "已停止";
-  if (writeChar) await send("S#").catch(e => log(`停止失敗：${e.message}`, "err"));
+  if (writeChar) await send("S#").then(resetTailDisplay).catch(e => log(`停止失敗：${e.message}`, "err"));
+}
+
+// ---------- 尾巴 ----------
+function setTailAngleInput(angle) {
+  $("tailAngle").value = angle;
+  $("tailRange").value = angle;
+}
+
+function resetTailDisplay() {
+  setTailAngleInput(90);
+  $("tailStatus").textContent = "尾巴角度：90°";
+}
+
+function readTailInt(id, min, max) {
+  const input = $(id);
+  const value = Number(input.value);
+  if (input.value.trim() === "" || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${input.labels[0].textContent}請輸入 ${min}～${max} 的整數`);
+  }
+  return value;
+}
+
+async function setTailAngle(angle) {
+  if (!writeChar) return;
+  try {
+    await send(`T,${angle}#`);
+    setTailAngleInput(angle);
+    $("tailStatus").textContent = `尾巴角度：${angle}°`;
+  } catch (e) {
+    log(`尾巴控制失敗：${e.message}`, "err");
+  }
+}
+
+async function wagTail() {
+  if (!writeChar) return;
+  try {
+    const times = readTailInt("wagTimes", 1, 50);
+    const ms = readTailInt("wagMs", 80, 1000);
+    const amp = readTailInt("wagAmp", 5, 90);
+    await send(`W,${times},${ms},${amp}#`);
+    $("tailStatus").textContent = `搖尾巴 ${times} 下，約 ${(times * ms * 2 / 1000).toFixed(1)} 秒`;
+  } catch (e) {
+    log(`搖尾巴失敗：${e.message}`, "err");
+  }
 }
 
 // ---------- 畫面 ----------
@@ -345,6 +425,25 @@ $("connectBtn").addEventListener("click", () => {
 });
 $("goBtn").addEventListener("click", () => run($("left").value, $("right").value, $("seconds").value));
 $("stopBtn").addEventListener("click", stopAll);
+
+$("tailRange").addEventListener("input", e => { $("tailAngle").value = e.target.value; });
+$("tailAngle").addEventListener("input", e => { $("tailRange").value = e.target.value; });
+$("tailAngle").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); $("tailSetBtn").click(); }
+});
+$("tailSetBtn").addEventListener("click", () => {
+  try { setTailAngle(readTailInt("tailAngle", 0, 180)); }
+  catch (e) { log(e.message, "err"); }
+});
+$("tailCenterBtn").addEventListener("click", () => setTailAngle(90));
+$("wagBtn").addEventListener("click", wagTail);
+document.querySelectorAll("[data-wag-preset]").forEach(button => button.addEventListener("click", () => {
+  const [times, ms, amp] = button.dataset.wagPreset.split(",").map(Number);
+  $("wagTimes").value = times;
+  $("wagMs").value = ms;
+  $("wagAmp").value = amp;
+  wagTail();
+}));
 
 for (const side of ["left", "right"]) {
   $(`${side}Range`).addEventListener("input", e => { $(side).value = e.target.value; });
