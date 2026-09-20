@@ -2,7 +2,7 @@
 
 打一句「往前走兩秒再右轉」，LLM 決定要呼叫哪些工具，指令透過藍牙送到 micro:bit，車子就動了。
 這個 repo 收了從「鍵盤遙控」到「LLM tool calling ＋ 馬達校正」的完整過程。
-
+https://youtube.com/shorts/D9MfTdmBM3Q?si=4X9HD2Bdnaq6EYTw[!https://youtube.com/shorts/D9MfTdmBM3Q?si=4X9HD2Bdnaq6EYTw]
 ## 資料夾
 
 | 資料夾 | 內容 |
